@@ -19,7 +19,7 @@ time_encoding: false
 reset_thres: 15.0
 success_radius: 0.5
 target_speed_range: [0.8, 1.5]
-target_spawn_distance_range: [4.0, 20.0]
+target_spawn_distance_range: [4.0, 7.0]
 target_bounds:
   min: [-6.0, -6.0, 1.0]
   max: [6.0, 6.0, 4.0]
