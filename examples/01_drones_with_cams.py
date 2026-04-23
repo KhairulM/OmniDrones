@@ -56,7 +56,8 @@ def main(cfg):
     camera_vis = Camera(dataclasses.replace(camera_cfg, resolution=(960, 720)))
 
     sim.reset()
-    camera_sensor.initialize(f"/World/envs/env_0/{drone.name}_*/base_link/Camera")
+    camera_sensor.initialize(
+        f"/World/envs/env_0/{drone.name}_*/base_link/Camera")
     camera_vis.initialize("/OmniverseKit_Persp")
     drone.initialize()
 
@@ -102,11 +103,12 @@ def main(cfg):
             sim.render()
             continue
         ref_pos, ref_yaw = compute_ref((i % cfg.steps)*cfg.sim.dt)
-        action = controller.compute(drone_state, target_pos=ref_pos, target_yaw=ref_yaw)
+        action = controller.compute(
+            drone_state, target_pos=ref_pos, target_yaw=ref_yaw)
         drone.apply_action(action)
         sim.step(render=True)
 
-        if i % 2 ==  0:
+        if i % 2 == 0:
             frames_sensor.append(camera_sensor.get_images().cpu())
             frames_vis.append(camera_vis.get_images().cpu())
 
@@ -117,27 +119,35 @@ def main(cfg):
     # write videos
     from torchvision.io import write_video
 
+    # PyAV can fail on numpy scalar FPS values, so coerce to plain ints.
+    sensor_fps = max(1, int(round(1.0 / float(cfg.sim.dt))))
+    depth_fps = max(1, int(round(0.5 / float(cfg.sim.dt))))
+
     for image_type, arrays in torch.stack(frames_sensor).items():
         print(f"Writing {image_type} of shape {arrays.shape}.")
         for drone_id, arrays_drone in enumerate(arrays.unbind(1)):
             if image_type == "rgb":
                 arrays_drone = arrays_drone.permute(0, 2, 3, 1)[..., :3]
-                write_video(f"demo_rgb_{drone_id}.mp4", arrays_drone, fps=1/cfg.sim.dt)
+                write_video(f"demo_rgb_{drone_id}.mp4",
+                            arrays_drone, fps=sensor_fps)
             elif image_type == "distance_to_camera":
-                arrays_drone = -torch.nan_to_num(arrays_drone, 0).permute(0, 2, 3, 1)
+                arrays_drone = - \
+                    torch.nan_to_num(arrays_drone, 0).permute(0, 2, 3, 1)
                 arrays_drone = arrays_drone.expand(*arrays_drone.shape[:-1], 3)
-                write_video(f"demo_depth_{drone_id}.mp4", arrays_drone, fps=0.5/cfg.sim.dt)
+                write_video(f"demo_depth_{drone_id}.mp4",
+                            arrays_drone, fps=depth_fps)
 
     for image_type, arrays in torch.stack(frames_vis).items():
         print(f"Writing {image_type} of shape {arrays.shape}.")
         for _, arrays_drone in enumerate(arrays.unbind(1)):
             if image_type == "rgb":
                 arrays_drone = arrays_drone.permute(0, 2, 3, 1)[..., :3]
-                write_video(f"demo_rgb.mp4", arrays_drone, fps=1/cfg.sim.dt)
+                write_video(f"demo_rgb.mp4", arrays_drone, fps=sensor_fps)
             elif image_type == "distance_to_camera":
-                arrays_drone = -torch.nan_to_num(arrays_drone, 0).permute(0, 2, 3, 1)
+                arrays_drone = - \
+                    torch.nan_to_num(arrays_drone, 0).permute(0, 2, 3, 1)
                 arrays_drone = arrays_drone.expand(*arrays_drone.shape[:-1], 3)
-                write_video(f"demo_depth.mp4", arrays_drone, fps=0.5/cfg.sim.dt)
+                write_video(f"demo_depth.mp4", arrays_drone, fps=depth_fps)
 
     simulation_app.close()
 

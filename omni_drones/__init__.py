@@ -25,8 +25,20 @@ import os
 
 import torch
 from tensordict import TensorDict
+import torchrl.data as torchrl_data
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), os.path.pardir, "cfg")
+
+
+# Backward-compatible aliases for older TorchRL spec class names used in OmniDrones.
+if not hasattr(torchrl_data, "CompositeSpec"):
+    torchrl_data.CompositeSpec = torchrl_data.Composite
+if not hasattr(torchrl_data, "DiscreteTensorSpec"):
+    torchrl_data.DiscreteTensorSpec = torchrl_data.Categorical
+if not hasattr(torchrl_data, "MultiDiscreteTensorSpec"):
+    torchrl_data.MultiDiscreteTensorSpec = torchrl_data.MultiCategorical
+if not hasattr(torchrl_data, "BinaryDiscreteTensorSpec"):
+    torchrl_data.BinaryDiscreteTensorSpec = torchrl_data.Binary
 
 
 def init_simulation_app(cfg):

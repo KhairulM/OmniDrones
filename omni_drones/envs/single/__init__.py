@@ -24,5 +24,6 @@
 from .hover import Hover
 from .track import Track
 from .fly_through import FlyThrough
+from .intercept import Intercept
 from .forest import Forest
 from .pinball import Pinball

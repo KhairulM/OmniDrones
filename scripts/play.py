@@ -16,6 +16,7 @@ from omni_drones.utils.torchrl.transforms import (
     FromMultiDiscreteAction,
     FromDiscreteAction,
     ravel_composite,
+    RateController,
 )
 from omni_drones.utils.torchrl import EpisodeStats
 from omni_drones.learning import ALGOS
@@ -25,6 +26,7 @@ from torchrl.envs.transforms import TransformedEnv, InitTracker, Compose
 
 
 FILE_PATH = os.path.dirname(__file__)
+
 
 @hydra.main(config_path=FILE_PATH, config_name="train", version_base=None)
 def main(cfg):
@@ -41,15 +43,17 @@ def main(cfg):
     env_class = IsaacEnv.REGISTRY[cfg.task.name]
     base_env = env_class(cfg, headless=cfg.headless)
 
-    transforms = [InitTracker()]
+    transforms: list = [InitTracker()]
 
     # a CompositeSpec is by deafault processed by a entity-based encoder
     # ravel it to use a MLP encoder instead
     if cfg.task.get("ravel_obs", False):
-        transform = ravel_composite(base_env.observation_spec, ("agents", "observation"))
+        transform = ravel_composite(
+            base_env.observation_spec, ("agents", "observation"))
         transforms.append(transform)
     if cfg.task.get("ravel_obs_central", False):
-        transform = ravel_composite(base_env.observation_spec, ("agents", "observation_central"))
+        transform = ravel_composite(
+            base_env.observation_spec, ("agents", "observation_central"))
         transforms.append(transform)
 
     # if cfg.task.get("history", False):
@@ -59,6 +63,7 @@ def main(cfg):
     # optionally discretize the action space or use a controller
     action_transform: str = cfg.task.get("action_transform", None)
     if action_transform is not None:
+        action_transform = action_transform.lower()
         if action_transform.startswith("multidiscrete"):
             nbins = int(action_transform.split(":")[1])
             transform = FromMultiDiscreteAction(nbins=nbins)
@@ -67,8 +72,16 @@ def main(cfg):
             nbins = int(action_transform.split(":")[1])
             transform = FromDiscreteAction(nbins=nbins)
             transforms.append(transform)
+        elif action_transform.startswith("rate"):
+            if base_env.controller is None:
+                raise RuntimeError(
+                    "Rate action transform requires a controller in the task config."
+                )
+            transform = RateController(base_env.controller.to(base_env.device))
+            transforms.append(transform)
         else:
-            raise NotImplementedError(f"Unknown action transform: {action_transform}")
+            raise NotImplementedError(
+                f"Unknown action transform: {action_transform}")
 
     env = TransformedEnv(base_env, Compose(*transforms)).train()
     env.set_seed(cfg.seed)
@@ -88,7 +101,7 @@ def main(cfg):
 
     stats_keys = [
         k for k in base_env.observation_spec.keys(True, True)
-        if isinstance(k, tuple) and k[0]=="stats"
+        if isinstance(k, tuple) and k[0] == "stats"
     ]
     episode_stats = EpisodeStats(stats_keys)
     collector = SyncDataCollector(
@@ -113,9 +126,11 @@ def main(cfg):
             }
             info.update(stats)
 
-        print(OmegaConf.to_yaml({k: v for k, v in info.items() if isinstance(v, float)}))
+        print(OmegaConf.to_yaml(
+            {k: v for k, v in info.items() if isinstance(v, float)}))
 
-        pbar.set_postfix({"rollout_fps": collector._fps, "frames": collector._frames})
+        pbar.set_postfix({"rollout_fps": collector._fps,
+                         "frames": collector._frames})
 
     simulation_app.close()
 

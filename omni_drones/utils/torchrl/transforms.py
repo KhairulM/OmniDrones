@@ -47,6 +47,8 @@ from dataclasses import replace
 
 def _transform_agent_spec(self: Transform, agent_spec: AgentSpec) -> AgentSpec:
     return agent_spec
+
+
 Transform.transform_agent_spec = _transform_agent_spec
 
 
@@ -54,12 +56,16 @@ def _transform_agent_spec(self: Compose, agent_spec: AgentSpec) -> AgentSpec:
     for transform in self.transforms:
         agent_spec = transform.transform_agent_spec(agent_spec)
     return agent_spec
+
+
 Compose.transform_agent_spec = _transform_agent_spec
 
 
 def _agent_spec(self: TransformedEnv) -> AgentSpec:
     agent_spec = self.transform.transform_agent_spec(self.base_env.agent_spec)
     return {name: replace(spec, _env=self) for name, spec in agent_spec.items()}
+
+
 TransformedEnv.agent_spec = property(_agent_spec)
 
 
@@ -146,7 +152,8 @@ class FromMultiDiscreteAction(Transform):
         return input_spec
 
     def _inv_apply_transform(self, action: torch.Tensor) -> torch.Tensor:
-        action = action / (self.nvec - 1) * (self.maximum - self.minimum) + self.minimum
+        action = action / (self.nvec - 1) * \
+            (self.maximum - self.minimum) + self.minimum
         return action
 
     def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
@@ -159,7 +166,7 @@ class DepthImageNorm(Transform):
         in_keys: Sequence[str],
         min_range: float,
         max_range: float,
-        inverse: bool=False
+        inverse: bool = False
     ):
         super().__init__(in_keys=in_keys)
         self.max_range = max_range
@@ -167,7 +174,8 @@ class DepthImageNorm(Transform):
         self.inverse = inverse
 
     def _apply_transform(self, obs: torch.Tensor) -> None:
-        obs = torch.nan_to_num(obs, posinf=self.max_range, neginf=self.min_range)
+        obs = torch.nan_to_num(
+            obs, posinf=self.max_range, neginf=self.min_range)
         obs = obs.clip(self.min_range, self.max_range)
         if self.inverse:
             obs = (obs - self.min_range) / (self.max_range - self.min_range)
@@ -177,7 +185,7 @@ class DepthImageNorm(Transform):
 
 
 def ravel_composite(
-    spec: Composite, key: str, start_dim: int=-2, end_dim: int=-1
+    spec: Composite, key: str, start_dim: int = -2, end_dim: int = -1
 ):
     r"""
 
@@ -220,13 +228,23 @@ class RateController(Transform):
 
     def transform_input_spec(self, input_spec: TensorSpec) -> TensorSpec:
         action_spec = input_spec[("full_action_spec", *self.action_key)]
-        spec = Unbounded(action_spec.shape[:-1]+(4,), device=action_spec.device)
+        spec = Unbounded(
+            action_spec.shape[:-1]+(4,), device=action_spec.device)
         input_spec[("full_action_spec", *self.action_key)] = spec
         return input_spec
 
     def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
         drone_state = tensordict[("info", "drone_state")][..., :13]
         action = tensordict[self.action_key]
+        # Preserve the original action shape (with agent dimension if present)
+        original_shape = action.shape
+        has_agent_dim = len(original_shape) > 2
+
+        # Squeeze agent dimension if present
+        if has_agent_dim:
+            action = action.squeeze(-2)
+            drone_state = drone_state.squeeze(-2)
+
         target_rate, target_thrust = action.split([3, 1], -1)
         target_thrust = ((target_thrust + 1) / 2).clip(0.) * self.max_thrust
         cmds = self.controller(
@@ -235,6 +253,9 @@ class RateController(Transform):
             target_thrust=target_thrust
         )
         torch.nan_to_num_(cmds, 0.)
+        # Reshape cmds back to match input action shape if agent dim was present
+        if has_agent_dim:
+            cmds = cmds.unsqueeze(-2)
         tensordict.set(self.action_key, cmds)
         return tensordict
 
@@ -252,14 +273,25 @@ class AttitudeController(Transform):
 
     def transform_input_spec(self, input_spec: TensorSpec) -> TensorSpec:
         action_spec = input_spec[("full_action_spec", *self.action_key)]
-        spec = Unbounded(action_spec.shape[:-1]+(4,), device=action_spec.device)
+        spec = Unbounded(
+            action_spec.shape[:-1]+(4,), device=action_spec.device)
         input_spec[("full_action_spec", *self.action_key)] = spec
         return input_spec
 
     def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
         drone_state = tensordict[("info", "drone_state")][..., :13]
         action = tensordict[self.action_key]
-        target_thrust, target_yaw_rate, target_roll, target_pitch = action.split(1, dim=-1)
+        # Preserve the original action shape (with agent dimension if present)
+        original_shape = action.shape
+        has_agent_dim = len(original_shape) > 2
+
+        # Squeeze agent dimension if present
+        if has_agent_dim:
+            action = action.squeeze(-2)
+            drone_state = drone_state.squeeze(-2)
+
+        target_thrust, target_yaw_rate, target_roll, target_pitch = action.split(
+            1, dim=-1)
         cmds = self.controller(
             drone_state,
             target_thrust=((target_thrust+1)/2).clip(0.) * self.max_thrust,
@@ -268,6 +300,9 @@ class AttitudeController(Transform):
             target_pitch=target_pitch * torch.pi
         )
         torch.nan_to_num_(cmds, 0.)
+        # Reshape cmds back to match input action shape if agent dim was present
+        if has_agent_dim:
+            cmds = cmds.unsqueeze(-2)
         tensordict.set(self.action_key, cmds)
         return tensordict
 
@@ -276,12 +311,13 @@ class History(Transform):
     def __init__(
         self,
         in_keys: Sequence[str],
-        out_keys: Sequence[str]=None,
+        out_keys: Sequence[str] = None,
         steps: int = 32,
     ):
         if out_keys is None:
             out_keys = [
-                f"{key}_h" if isinstance(key, str) else key[:-1] + (f"{key[-1]}_h",)
+                f"{key}_h" if isinstance(
+                    key, str) else key[:-1] + (f"{key[-1]}_h",)
                 for key in in_keys
             ]
         if any(key in in_keys for key in out_keys):
@@ -318,7 +354,8 @@ class History(Transform):
     def reset(self, tensordict: TensorDictBase) -> TensorDictBase:
         _reset = tensordict.get("_reset", None)
         if _reset is None:
-            _reset = torch.ones(tensordict.batch_size, dtype=bool, device=tensordict.device)
+            _reset = torch.ones(tensordict.batch_size,
+                                dtype=bool, device=tensordict.device)
         for in_key, out_key in zip(self.in_keys, self.out_keys):
             if out_key not in tensordict.keys(True, True):
                 item = tensordict.get(in_key)
@@ -333,4 +370,3 @@ class History(Transform):
                 item_history = tensordict.get(out_key)
                 item_history[_reset] = 0.
         return tensordict
-
