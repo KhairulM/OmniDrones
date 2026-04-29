@@ -22,7 +22,7 @@
 
 
 import logging
-from typing import Type, Dict
+from typing import Dict, Optional, Type
 
 import torch
 import torch.distributions as D
@@ -49,14 +49,15 @@ class MultirotorBase(RobotBase):
 
     def __init__(
         self,
-        name: str = None,
-        cfg: RobotCfg=None,
+        name: Optional[str] = None,
+        cfg: Optional[RobotCfg] = None,
         is_articulation: bool = True,
     ) -> None:
         super().__init__(name, cfg, is_articulation)
 
         with open(self.param_path, "r") as f:
-            logging.info(f"Reading {self.name}'s params from {self.param_path}.")
+            logging.info(
+                f"Reading {self.name}'s params from {self.param_path}.")
             self.params = yaml.safe_load(f)
         self.num_rotors = self.params["rotor_configuration"]["num_rotors"]
 
@@ -78,7 +79,8 @@ class MultirotorBase(RobotBase):
     @property
     def action_spec(self):
         if not hasattr(self, "_action_spec"):
-            self._action_spec = Bounded(-1, 1, self.num_rotors, device=self.device)
+            self._action_spec = Bounded(-1, 1,
+                                        self.num_rotors, device=self.device)
         return self._action_spec
 
     def initialize(
@@ -90,7 +92,7 @@ class MultirotorBase(RobotBase):
             super().initialize(prim_paths_expr=prim_paths_expr)
             self.base_link = RigidPrimView(
                 prim_paths_expr=f"{self.prim_paths_expr}/base_link",
-                name="base_link",
+                name=f"{self.name}_base_link",
                 track_contact_forces=track_contact_forces,
                 shape=self.shape,
             )
@@ -116,13 +118,14 @@ class MultirotorBase(RobotBase):
         self.rotors_view = RigidPrimView(
             # prim_paths_expr=f"{self.prim_paths_expr}/rotor_[0-{self.num_rotors-1}]",
             prim_paths_expr=f"{self.prim_paths_expr}/rotor_*",
-            name="rotors",
+            name=f"{self.name}_rotors",
             shape=(*self.shape, self.num_rotors)
         )
         self.rotors_view.initialize()
 
         rotor_config = self.params["rotor_configuration"]
-        self.rotors = RotorGroup(rotor_config, dt=self.dt, batch_shape=self.shape).to(self.device)
+        self.rotors = RotorGroup(
+            rotor_config, dt=self.dt, batch_shape=self.shape).to(self.device)
 
         # Get the base values (all envs have the same initial values, take first and flatten)
         self.KF_0 = self.rotors.KF.data[0].flatten().clone()
@@ -132,7 +135,7 @@ class MultirotorBase(RobotBase):
             .float()
             .to(self.device)
         )
-        
+
         # All rotor parameters are now batched inside RotorGroup
         self.throttle = self.rotors.throttle
         self.tau_up = self.rotors.tau_up
@@ -141,12 +144,14 @@ class MultirotorBase(RobotBase):
         self.KM = self.rotors.KM
         self.directions = self.rotors.directions
 
-        self.thrusts = torch.zeros(*self.shape, self.num_rotors, 3, device=self.device)
+        self.thrusts = torch.zeros(
+            *self.shape, self.num_rotors, 3, device=self.device)
         self.torques = torch.zeros(*self.shape, 3, device=self.device)
         self.forces = torch.zeros(*self.shape, 3, device=self.device)
 
         self.pos, self.rot = self.get_world_poses(True)
-        self.throttle_difference = torch.zeros(self.throttle.shape[:-1], device=self.device)
+        self.throttle_difference = torch.zeros(
+            self.throttle.shape[:-1], device=self.device)
         self.heading = torch.zeros(*self.shape, 3, device=self.device)
         self.up = torch.zeros(*self.shape, 3, device=self.device)
         self.vel = self.vel_w = torch.zeros(*self.shape, 6, device=self.device)
@@ -159,8 +164,9 @@ class MultirotorBase(RobotBase):
 
         self.masses = self.base_link.get_masses().clone()
         self.gravity = self.masses * 9.81
-        self.inertias = self.base_link.get_inertias().reshape(*self.shape, 3, 3).diagonal(0, -2, -1)
-        
+        self.inertias = self.base_link.get_inertias().reshape(
+            *self.shape, 3, 3).diagonal(0, -2, -1)
+
         # default/initial parameters
         self.MASS_0 = self.masses[0].clone()
         self.INERTIA_0 = (
@@ -170,12 +176,15 @@ class MultirotorBase(RobotBase):
             .diagonal(0, -2, -1)
             .clone()
         )
-        self.THRUST2WEIGHT_0 = self.KF_0 / (self.MASS_0 * 9.81) # TODO: get the real g
-        self.FORCE2MOMENT_0 = torch.broadcast_to(self.KF_0 / self.KM_0, self.THRUST2WEIGHT_0.shape)
+        self.THRUST2WEIGHT_0 = self.KF_0 / \
+            (self.MASS_0 * 9.81)  # TODO: get the real g
+        self.FORCE2MOMENT_0 = torch.broadcast_to(
+            self.KF_0 / self.KM_0, self.THRUST2WEIGHT_0.shape)
 
         logging.info(str(self))
 
-        self.drag_coef = torch.zeros(*self.shape, 1, device=self.device) * self.params["drag_coef"]
+        self.drag_coef = torch.zeros(
+            *self.shape, 1, device=self.device) * self.params["drag_coef"]
         self.intrinsics = self.intrinsics_spec.expand(self.shape).zero()
 
     def setup_randomization(self, cfg):
@@ -183,7 +192,8 @@ class MultirotorBase(RobotBase):
             raise RuntimeError
 
         for phase in ("train", "eval"):
-            if phase not in cfg: continue
+            if phase not in cfg:
+                continue
             mass_scale = cfg[phase].get("mass_scale", None)
             if mass_scale is not None:
                 low = self.MASS_0 * mass_scale[0]
@@ -191,19 +201,27 @@ class MultirotorBase(RobotBase):
                 self.randomization[phase]["mass"] = D.Uniform(low, high)
             inertia_scale = cfg[phase].get("inertia_scale", None)
             if inertia_scale is not None:
-                low = self.INERTIA_0 * torch.as_tensor(inertia_scale[0], device=self.device)
-                high = self.INERTIA_0 * torch.as_tensor(inertia_scale[1], device=self.device)
+                low = self.INERTIA_0 * \
+                    torch.as_tensor(inertia_scale[0], device=self.device)
+                high = self.INERTIA_0 * \
+                    torch.as_tensor(inertia_scale[1], device=self.device)
                 self.randomization[phase]["inertia"] = D.Uniform(low, high)
             t2w_scale = cfg[phase].get("t2w_scale", None)
             if t2w_scale is not None:
-                low = self.THRUST2WEIGHT_0 * torch.as_tensor(t2w_scale[0], device=self.device)
-                high = self.THRUST2WEIGHT_0 * torch.as_tensor(t2w_scale[1], device=self.device)
-                self.randomization[phase]["thrust2weight"] = D.Uniform(low, high)
+                low = self.THRUST2WEIGHT_0 * \
+                    torch.as_tensor(t2w_scale[0], device=self.device)
+                high = self.THRUST2WEIGHT_0 * \
+                    torch.as_tensor(t2w_scale[1], device=self.device)
+                self.randomization[phase]["thrust2weight"] = D.Uniform(
+                    low, high)
             f2m_scale = cfg[phase].get("f2m_scale", None)
             if f2m_scale is not None:
-                low = self.FORCE2MOMENT_0 * torch.as_tensor(f2m_scale[0], device=self.device)
-                high = self.FORCE2MOMENT_0 * torch.as_tensor(f2m_scale[1], device=self.device)
-                self.randomization[phase]["force2moment"] = D.Uniform(low, high)
+                low = self.FORCE2MOMENT_0 * \
+                    torch.as_tensor(f2m_scale[0], device=self.device)
+                high = self.FORCE2MOMENT_0 * \
+                    torch.as_tensor(f2m_scale[1], device=self.device)
+                self.randomization[phase]["force2moment"] = D.Uniform(
+                    low, high)
             drag_coef_scale = cfg[phase].get("drag_coef_scale", None)
             if drag_coef_scale is not None:
                 low = self.params["drag_coef"] * drag_coef_scale[0]
@@ -231,24 +249,31 @@ class MultirotorBase(RobotBase):
                     torch.tensor(com[1], device=self.device)
                 )
             if not len(self.randomization[phase]) == len(cfg[phase]):
-                unkown_keys = set(cfg[phase].keys()) - set(self.randomization[phase].keys())
+                unkown_keys = set(cfg[phase].keys()) - \
+                    set(self.randomization[phase].keys())
                 raise ValueError(
                     f"Unknown randomization {unkown_keys}."
                 )
 
-        logging.info(f"Setup randomization:\n" + pprint.pformat(dict(self.randomization)))
+        logging.info(f"Setup randomization:\n" +
+                     pprint.pformat(dict(self.randomization)))
 
     def apply_action(self, actions: torch.Tensor) -> torch.Tensor:
-        rotor_cmds = actions.expand(*self.shape, self.num_rotors)
+        actions = torch.nan_to_num(actions, nan=0.0, posinf=1.0, neginf=-1.0)
+        actions = actions.clamp(-1.0, 1.0).contiguous()
+        rotor_cmds = actions.expand(*self.shape, self.num_rotors).contiguous()
         last_throttle = self.throttle.clone()
 
         thrusts, moments = self.rotors(rotor_cmds)
 
         rotor_pos, rotor_rot = self.rotors_view.get_world_poses()
-        torque_axis = quat_axis(rotor_rot.flatten(end_dim=-2), axis=2).unflatten(0, (*self.shape, self.num_rotors))
+        torque_axis = quat_axis(rotor_rot.flatten(
+            end_dim=-2), axis=2).unflatten(0, (*self.shape, self.num_rotors))
 
         self.thrusts[..., 2] = thrusts
         self.torques[:] = (moments.unsqueeze(-1) * torque_axis).sum(-2)
+        self.thrusts[:] = torch.nan_to_num(self.thrusts)
+        self.torques[:] = torch.nan_to_num(self.torques)
 
         # TODO@btx0424: general rotating rotor
         if self.is_articulation and self.rotor_joint_indices is not None:
@@ -258,7 +283,7 @@ class MultirotorBase(RobotBase):
                 joint_indices=self.rotor_joint_indices
             )
         self.forces.zero_()
-        
+
         # TODO: global downwash
         if self.n > 1:
             self.forces[:] += vmap(self.downwash)(
@@ -268,22 +293,30 @@ class MultirotorBase(RobotBase):
                 kz=0.3
             ).sum(-2)
         self.forces[:] += (self.drag_coef * self.masses) * self.vel[..., :3]
+        self.forces[:] = torch.nan_to_num(self.forces)
 
-        # IsaacSim 5.1.0 integration: applying a force to a rigid body seems to overwrite any existing forces on it,
-        # so we have to apply body forces before rotor forces so the articulation links can propagate forces from the rotors to the base.
+        # IsaacSim 5.1.0 integration: applying a force to a rigid body seems
+        # to overwrite any existing forces on it, so we have to apply body
+        # forces BEFORE rotor forces so the articulation links can propagate
+        # forces from the rotors to the base. Reversing this order causes
+        # rotor thrusts to be silently wiped out and the drone falls.
         self.base_link.apply_forces_and_torques_at_pos(
-            self.forces.reshape(-1, 3),
-            self.torques.reshape(-1, 3),
+            forces=self.forces.reshape(-1, 3).contiguous(),
+            positions=None,
+            torques=self.torques.reshape(-1, 3).contiguous(),
             is_global=True
         )
         self.rotors_view.apply_forces_and_torques_at_pos(
-            self.thrusts.reshape(-1, 3),
+            forces=self.thrusts.reshape(-1, 3).contiguous(),
+            positions=None,
+            torques=None,
             is_global=False
         )
-        self.throttle_difference[:] = torch.norm(self.throttle - last_throttle, dim=-1)
+        self.throttle_difference[:] = torch.norm(
+            self.throttle - last_throttle, dim=-1)
         return self.throttle.sum(-1)
 
-    def get_state(self, check_nan: bool=False, env_frame: bool=True):
+    def get_state(self, check_nan: bool = False, env_frame: bool = True):
         self.pos[:], self.rot[:] = self.get_world_poses(True)
         if env_frame and hasattr(self, "_envs_positions"):
             self.pos.sub_(self._envs_positions)
@@ -300,14 +333,15 @@ class MultirotorBase(RobotBase):
         # self.acc[:] = acc
         self.heading[:] = quat_axis(self.rot, axis=0)
         self.up[:] = quat_axis(self.rot, axis=2)
-        state = [self.pos, self.rot, self.vel, self.heading, self.up, self.throttle * 2 - 1]
+        state = [self.pos, self.rot, self.vel,
+                 self.heading, self.up, self.throttle * 2 - 1]
 
         state = torch.cat(state, dim=-1)
         if check_nan:
             assert not torch.isnan(state).any()
         return state
 
-    def _reset_idx(self, env_ids: torch.Tensor, train: bool=True):
+    def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
         if env_ids is None:
             env_ids = torch.arange(self.shape[0], device=self.device)
 
@@ -322,7 +356,8 @@ class MultirotorBase(RobotBase):
         elif "eval" in self.randomization:
             self._randomize(env_ids, self.randomization["eval"])
 
-        init_throttle = self.gravity[env_ids] / self.KF[env_ids].sum(-1, keepdim=True)
+        init_throttle = self.gravity[env_ids] / \
+            self.KF[env_ids].sum(-1, keepdim=True)
         self.throttle.data[env_ids] = self.rotors.f_inv(init_throttle)
         self.throttle_difference[env_ids].fill_(0.0)
         return env_ids
@@ -357,15 +392,18 @@ class MultirotorBase(RobotBase):
             self.KM[env_ids] = KM
             self.intrinsics["KM"][env_ids] = KM / self.KM_0
         if "drag_coef" in distributions:
-            drag_coef = distributions["drag_coef"].sample(shape).reshape(-1, 1, 1)
+            drag_coef = distributions["drag_coef"].sample(
+                shape).reshape(-1, 1, 1)
             self.drag_coef[env_ids] = drag_coef
             self.intrinsics["drag_coef"][env_ids] = drag_coef
         if "tau_up" in distributions:
-            tau_up = distributions["tau_up"].sample(shape+self.rotors_view.shape[1:])
+            tau_up = distributions["tau_up"].sample(
+                shape+self.rotors_view.shape[1:])
             self.tau_up[env_ids] = tau_up
             self.intrinsics["tau_up"][env_ids] = tau_up
         if "tau_down" in distributions:
-            tau_down = distributions["tau_down"].sample(shape+self.rotors_view.shape[1:])
+            tau_down = distributions["tau_down"].sample(
+                shape+self.rotors_view.shape[1:])
             self.tau_down[env_ids] = tau_down
             self.intrinsics["tau_down"][env_ids] = tau_down
 
@@ -399,8 +437,8 @@ class MultirotorBase(RobotBase):
         p0: torch.Tensor,
         p1: torch.Tensor,
         p1_t: torch.Tensor,
-        kr: float=2,
-        kz: float=1,
+        kr: float = 2,
+        kz: float = 1,
     ):
         """
         A highly simplified downwash effect model.
@@ -417,22 +455,27 @@ class MultirotorBase(RobotBase):
         return f
 
     @staticmethod
-    def make(drone_model: str, controller: str=None, device: str="cpu"):
+    def make(
+        drone_model: str,
+        controller_str: Optional[str] = None,
+        device: str = "cpu",
+        name: Optional[str] = None,
+    ):
         drone_cls = MultirotorBase.REGISTRY[drone_model]
-        drone = drone_cls()
+        drone = drone_cls(name=name)
         from omni_drones.controllers import ControllerBase
-        if controller is not None:
-            controller_cls = ControllerBase.REGISTRY[controller]
-            controller = controller_cls(drone.gravity[1], drone.params).to(device)
+        if controller_str is not None:
+            controller_cls = ControllerBase.REGISTRY[controller_str]
+            controller = controller_cls(
+                drone.gravity[1], drone.params).to(device)
         return drone, controller
 
 
 def separation(p0, p1, p1_d):
-    rel_pos = rel_pos =  p1.unsqueeze(0) - p0.unsqueeze(1)
+    rel_pos = rel_pos = p1.unsqueeze(0) - p0.unsqueeze(1)
     z_distance = (rel_pos * p1_d).sum(-1, keepdim=True)
     z_displacement = z_distance * p1_d
 
     r_displacement = rel_pos - z_displacement
     r_distance = torch.norm(r_displacement, dim=-1, keepdim=True)
     return z_distance, r_distance
-

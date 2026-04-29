@@ -1,0 +1,5 @@
+# Lee position controller parameters for Iris
+position_gain: [3, 3, 3]
+velocity_gain: [2.0, 2.0, 2.0]
+attitude_gain: [0.6, 0.6, 0.035]
+angular_rate_gain: [0.1, 0.1, 0.025]

@@ -184,9 +184,9 @@ class LeePositionController(ControllerBase):
             torch.zeros_like(target_yaw)
         ], dim=-1)
         b3_des = -normalize(acc)
-        b2_des = normalize(torch.cross(b3_des, b1_des, 1))
+        b2_des = normalize(torch.cross(b3_des, b1_des, dim=-1))
         R_des = torch.stack([
-            b2_des.cross(b3_des, 1),
+            torch.cross(b2_des, b3_des, dim=-1),
             b2_des,
             b3_des
         ], dim=-1)
@@ -373,7 +373,7 @@ class RateController(ControllerBase):
         rate_error = body_rate - target_rate
         acc_des = (
             - rate_error * self.gain_angular_rate
-            + angvel.cross(angvel)
+            + torch.cross(angvel, angvel, dim=-1)
         )
         angacc_thrust = torch.cat([acc_des, target_thrust], dim=1)
         cmd = (self.mixer @ angacc_thrust.T).T

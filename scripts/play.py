@@ -73,11 +73,18 @@ def main(cfg):
             transform = FromDiscreteAction(nbins=nbins)
             transforms.append(transform)
         elif action_transform.startswith("rate"):
-            if base_env.controller is None:
+            # some environments (e.g. Intercept) expose the pursuer controller
+            # as `pursuer_controller` rather than `controller`.
+            controller = getattr(base_env, "controller", None)
+            if controller is None:
+                controller = getattr(base_env, "pursuer_controller", None)
+
+            if controller is None:
                 raise RuntimeError(
                     "Rate action transform requires a controller in the task config."
                 )
-            transform = RateController(base_env.controller.to(base_env.device))
+
+            transform = RateController(controller.to(base_env.device))
             transforms.append(transform)
         else:
             raise NotImplementedError(
