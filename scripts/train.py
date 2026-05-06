@@ -19,9 +19,11 @@ from omni_drones.utils.torchrl import SyncDataCollector
 from omni_drones.utils.torchrl.transforms import (
     FromMultiDiscreteAction,
     FromDiscreteAction,
+    PIDRateController,
     ravel_composite,
     AttitudeController,
     RateController,
+    VelController,
 )
 from omni_drones.utils.torchrl import RenderCallback, EpisodeStats
 from omni_drones.learning import ALGOS
@@ -112,6 +114,19 @@ def main(cfg):
                 )
 
             transform = RateController(controller.to(base_env.device))
+            transforms.append(transform)
+        elif action_transform == "velocity":
+            controller = getattr(base_env, "controller", None)
+            transform = VelController(controller)
+            transforms.append(transform)
+        elif action_transform == "attitude":
+            controller = getattr(base_env, "controller", None)
+            transform = AttitudeController(controller)
+            transforms.append(transform)
+        elif action_transform == "PIDrate":
+            controller = getattr(base_env, "controller", None)
+            transform = PIDRateController(controller)
+            # transforms.append(TanhTransform)
             transforms.append(transform)
         else:
             raise NotImplementedError(

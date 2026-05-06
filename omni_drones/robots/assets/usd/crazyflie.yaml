@@ -6,9 +6,12 @@ inertia:
   yy: 1.4e-5
   yz: 0.0
   zz: 2.17e-5
-mass: 0.028
+min_thrust_ratio: 0.0
+max_thrust_ratio: 0.9
+fixed_yaw: 0
+mass: 0.0321 # original: 0.028
 l: 0.096
-drag_coef: 0.2
+drag_coef: 0.0 # original: 0.2
 rotor_configuration:
   arm_lengths:
     - 0.043

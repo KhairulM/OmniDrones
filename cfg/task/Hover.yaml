@@ -6,12 +6,12 @@ defaults:
   - /base/sim_base@_here_
 
 env:
-  num_envs: 128
+  num_envs: 256
   env_spacing: 6
 
 drone_model:
-  name: Firefly
-  controller: LeePositionController
+  name: Crazyflie
+  controller: RateController
 
 time_encoding: true
 
@@ -20,4 +20,7 @@ reward_action_smoothness_weight: 0.0
 reward_motion_smoothness_weight: 0.0
 reward_distance_scale: 1.2
 
-action_transform: null
+action_transform: rate
+
+wandb:
+  mode: disabled

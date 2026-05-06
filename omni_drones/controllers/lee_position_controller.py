@@ -385,3 +385,191 @@ class RateController(ControllerBase):
         target_rate, target_thrust = actions.split([3, 1], -1)
         target_thrust = ((target_thrust + 1) / 2).clip(0.) * self.max_thrusts
         return target_rate * torch.pi, target_thrust
+
+
+class PIDRateController(nn.Module):
+    def __init__(self, dt, g, uav_params) -> None:
+        super().__init__()
+        rotor_config = uav_params["rotor_configuration"]
+        self.rotor_config = rotor_config
+        force_constants = torch.as_tensor(rotor_config["force_constants"])
+        max_rot_vel = torch.as_tensor(rotor_config["max_rotation_velocities"])
+
+        self.g = nn.Parameter(torch.tensor(g))
+        self.max_thrusts = nn.Parameter(max_rot_vel.square() * force_constants)
+
+        # PID param
+        self.dt = nn.Parameter(torch.tensor(dt))
+        self.pid_kp = nn.Parameter(torch.tensor([250.0, 250.0, 120.0]))
+        self.pid_ki = nn.Parameter(torch.tensor([500.0, 500.0, 16.7]))
+        self.pid_kd = nn.Parameter(torch.tensor([2.5, 2.5, 0.0]))
+        self.kff = nn.Parameter(torch.tensor([0.0, 0.0, 0.0]))
+        self.count = 0  # if = 0, integ, last_body_rate = 0.0
+        self.iLimit = nn.Parameter(torch.tensor([33.3, 33.3, 166.7]))
+        self.outLimit = nn.Parameter(torch.tensor((2.0)**15 - 1.0))
+
+        self.target_clip = uav_params['target_clip']
+        self.max_thrust_ratio = uav_params['max_thrust_ratio']
+        self.min_thrust_ratio = uav_params['min_thrust_ratio']
+        self.fixed_yaw = uav_params['fixed_yaw']
+        self.LPF_coef = uav_params['LPF_coef']
+
+        self.init_flag = True  # init last_body_rate and inte
+
+    def set_byTunablePara(
+        self,
+        tunable_parameters: dict = {},
+    ):
+        # PID param
+        self.dt = nn.Parameter(torch.tensor(0.02))
+        self.pid_kp = nn.Parameter(torch.tensor(tunable_parameters['pid_kp']))
+        self.pid_kd = nn.Parameter(torch.tensor(tunable_parameters['pid_kd'] + [0.0]))  # set coeff_yaw = 0.0
+        self.pid_ki = nn.Parameter(torch.tensor(tunable_parameters['pid_ki']))
+        self.kff = nn.Parameter(torch.tensor([0.0, 0.0, 0.0]))
+        self.count = 0  # if = 0, integ, last_body_rate = 0.0
+        self.iLimit = nn.Parameter(torch.tensor(tunable_parameters['iLimit']))
+        self.outLimit = nn.Parameter(torch.tensor((2.0)**16))
+
+    def forward(
+        self,
+        root_state: torch.Tensor,
+        target_rate: torch.Tensor,
+        target_thrust: torch.Tensor,
+        reset_pid: torch.Tensor,
+    ):
+        assert root_state.shape[:-1] == target_rate.shape[:-1]
+
+        # target_rate: degree/s
+        # target_thrust: [0, 2**16]
+        # body_rate: use degree
+
+        batch_shape = root_state.shape[:-1]
+        root_state = root_state.reshape(-1, 13)
+        target_rate = target_rate.reshape(-1, 3)
+        target_thrust = target_thrust.reshape(-1, 1)
+        reset_pid = reset_pid.reshape(-1)
+        device = root_state.device
+
+        # pid reset
+        if self.init_flag:
+            self.last_body_rate = torch.zeros(size=(*batch_shape, 3)).to(device).reshape(-1, 3)
+            self.integ = torch.zeros(size=(*batch_shape, 3)).to(device).reshape(-1, 3)
+            self.init_flag = False
+        self.last_body_rate[reset_pid] = torch.zeros(size=(*batch_shape, 3)).to(device).reshape(-1, 3)[reset_pid]
+        self.integ[reset_pid] = torch.zeros(size=(*batch_shape, 3)).to(device).reshape(-1, 3).to(device)[reset_pid]
+
+        pos, rot, linvel, angvel = root_state.split([3, 4, 3, 3], dim=1)
+        # convert angular velocity from world frame to body frame
+        body_rate = quat_rotate_inverse(rot, angvel) * 180.0 / torch.pi
+
+        rate_error = target_rate - body_rate
+
+        # P
+        outputP = rate_error * self.pid_kp.view(1, -1)
+        # D
+        deriv = -(body_rate - self.last_body_rate) / self.dt
+        deriv[torch.isnan(deriv)] = 0.0
+        outputD = deriv * self.pid_kd.view(1, -1)
+        # I
+        self.integ += rate_error * self.dt
+        self.integ = torch.clip(self.integ, -self.iLimit, self.iLimit)
+        outputI = self.integ * self.pid_ki.view(1, -1)
+        # kff
+        outputFF = target_rate * self.kff.view(1, -1)
+
+        output = outputP + outputD + outputI + outputFF
+        output[torch.isnan(output)] = 0.0
+
+        # clip
+        output = torch.clip(output, - self.outLimit, self.outLimit)
+
+        # set last error
+        self.last_body_rate = body_rate.clone()
+
+        # deploy body rate to four rotors
+        # output: r, p, y
+        r = (output[:, 0] / 2.0).unsqueeze(1)
+        p = (output[:, 1] / 2.0).unsqueeze(1)
+        # y = - output[:, 2].unsqueeze(1)
+        y = output[:, 2].unsqueeze(1)
+
+        m1 = target_thrust + r - p + y
+        m2 = target_thrust + r + p - y
+        m3 = target_thrust - r + p + y
+        m4 = target_thrust - r - p - y
+
+        ctbr = torch.concat([r, p, y, target_thrust], dim=1).reshape(*batch_shape, -1)
+
+        cmd = torch.concat([m1, m2, m3, m4], dim=1) / 2**16 * 2 - 1.0
+
+        cmd = cmd.reshape(*batch_shape, -1)
+
+        return cmd, ctbr
+
+    def debug_step(
+        self,
+        real_body_rate: torch.Tensor,
+        target_rate: torch.Tensor,
+        target_thrust: torch.Tensor,
+    ):
+        # assert root_state.shape[:-1] == target_rate.shape[:-1]
+
+        # real_body_rate: radian/s
+        # target_rate: degree/s
+        # target_thrust: [0, 2**16]
+
+        batch_shape = real_body_rate.shape[:-1]
+        # root_state = root_state.reshape(-1, 13)
+        target_rate = target_rate.reshape(-1, 3)
+        target_thrust = target_thrust.reshape(-1, 1)
+        device = real_body_rate.device
+        if self.count == 0:
+            self.last_body_rate = torch.zeros(size=(batch_shape[0], 3)).to(device)
+            self.integ = torch.zeros(size=(batch_shape[0], 3)).to(device)
+        self.count += 1
+
+        # pos, rot, linvel, angvel = root_state.split([3, 4, 3, 3], dim=1)
+        # body_rate = quat_rotate_inverse(rot, angvel)
+
+        body_rate = real_body_rate * 180 / torch.pi
+
+        rate_error = target_rate - body_rate
+
+        # P
+        outputP = rate_error * self.pid_kp.view(1, -1)
+        # D
+        deriv = -(body_rate - self.last_body_rate) / self.dt
+        deriv[torch.isnan(deriv)] = 0.0
+        outputD = deriv * self.pid_kd.view(1, -1)
+        # I
+        self.integ += rate_error * self.dt
+        self.integ = torch.clip(self.integ, -self.iLimit, self.iLimit)
+        outputI = self.integ * self.pid_ki.view(1, -1)
+        # kff
+        outputFF = target_rate * self.kff.view(1, -1)
+
+        output = outputP + outputD + outputI + outputFF
+        output[torch.isnan(output)] = 0.0
+        # clip
+        output = torch.clip(output, - self.outLimit, self.outLimit)
+
+        # set last error
+        self.last_body_rate = body_rate.clone()
+
+        # deploy body rate to four rotors
+        # output: r, p, y
+        r = (output[:, 0] / 2.0).unsqueeze(1)
+        p = (output[:, 1] / 2.0).unsqueeze(1)
+        y = - output[:, 2].unsqueeze(1)  # 固件实现，sim中用的正数
+        # y = output[:, 2].unsqueeze(1)
+
+        m1 = target_thrust - r + p + y  # 固件实现，sim中13对调，24对调
+        m2 = target_thrust - r - p - y
+        m3 = target_thrust + r - p + y
+        m4 = target_thrust + r + p - y
+
+        cmd = torch.concat([m1, m2, m3, m4], dim=1) / 2**16 * 2 - 1
+
+        cmd = cmd.reshape(*batch_shape, -1)
+
+        return cmd, (r, p, y, target_thrust)

@@ -110,6 +110,7 @@ class Hover(IsaacEnv):
     | `time_encoding`         | bool  | True      | Indicates whether to include time encoding in the observation space. If set to True, a 4-dimensional vector encoding the current progress of the episode is included in the observation. If set to False, this feature is not included. |
     | `has_payload`           | bool  | False     | Indicates whether the drone has a payload attached. If set to True, it means that a payload is attached; otherwise, if set to False, no payload is attached.                                                                            |
     """
+
     def __init__(self, cfg, headless):
         self.reward_effort_weight = cfg.task.reward_effort_weight
         self.reward_action_smoothness_weight = cfg.task.reward_action_smoothness_weight
@@ -149,8 +150,8 @@ class Hover(IsaacEnv):
         self.init_vels = torch.zeros_like(self.drone.get_velocities())
 
         self.init_pos_dist = D.Uniform(
-            torch.tensor([-2.5, -2.5, 1.], device=self.device),
-            torch.tensor([2.5, 2.5, 2.5], device=self.device)
+            torch.tensor([-0.5, -0.5, 1.5], device=self.device),
+            torch.tensor([0.5, 0.5, 2.5], device=self.device)
         )
         self.init_rpy_dist = D.Uniform(
             torch.tensor([-.2, -.2, 0.], device=self.device) * torch.pi,
@@ -241,8 +242,17 @@ class Hover(IsaacEnv):
             "uprightness": Unbounded(1),
             "action_smoothness": Unbounded(1),
         }).expand(self.num_envs).to(self.device)
+        info_spec = Composite({
+            "drone_state": Unbounded(torch.Size([1, 13]), device=self.device),
+            # "prev_action": torch.stack([self.drone.action_spec] * self.drone.n, 0).to(self.device),
+            # "policy_action": torch.stack([self.drone.action_spec] * self.drone.n, 0).to(self.device),
+            # "prev_prev_action": torch.stack([self.drone.action_spec] * self.drone.n, 0).to(self.device),
+        }).expand(self.num_envs).to(self.device)
         self.observation_spec["stats"] = stats_spec
+        self.observation_spec["info"] = info_spec
+
         self.stats = stats_spec.zero()
+        self.info = info_spec.zero()
 
     def _reset_idx(self, env_ids: torch.Tensor):
         self.drone._reset_idx(env_ids, self.training)
@@ -294,6 +304,8 @@ class Hover(IsaacEnv):
             obs.append(t.expand(-1, self.time_encoding_dim).unsqueeze(1))
         obs = torch.cat(obs, dim=-1)
 
+        self.info["drone_state"][:] = self.drone_state[..., :13]
+
         return TensorDict(
             {
                 "agents": {
@@ -301,6 +313,7 @@ class Hover(IsaacEnv):
                     "intrinsics": self.drone.intrinsics,
                 },
                 "stats": self.stats.clone(),
+                "info": self.info.clone(),
             },
             self.batch_size,
         )

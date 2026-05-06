@@ -29,9 +29,12 @@ from torchrl.data import Bounded, Unbounded
 
 from omni_drones.robots import ASSET_PATH
 from omni_drones.robots.drone import MultirotorBase
+from omni_drones.controllers import RateController
 
 
 class Crazyflie(MultirotorBase):
 
     usd_path: str = ASSET_PATH + "/usd/cf2x_pybullet.usd"
     param_path: str = ASSET_PATH + "/usd/crazyflie.yaml"
+
+    DEFAULT_CONTROLLER = RateController

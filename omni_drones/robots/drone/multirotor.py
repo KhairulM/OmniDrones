@@ -300,6 +300,20 @@ class MultirotorBase(RobotBase):
         # forces BEFORE rotor forces so the articulation links can propagate
         # forces from the rotors to the base. Reversing this order causes
         # rotor thrusts to be silently wiped out and the drone falls.
+        #
+        # As a consequence, body-level forces (downwash + aerodynamic drag)
+        # staged on `base_link` here would themselves be wiped by the
+        # subsequent `rotors_view` call. To preserve them we additionally
+        # distribute the body force across the rotor links: convert the
+        # global force into the base body frame, split it evenly across the
+        # `num_rotors` rotors, and add it to each rotor's local thrust
+        # (which is also applied in the local frame). Body torques are kept
+        # on `base_link` since the rotors call passes `torques=None`, which
+        # leaves the torques on other links untouched.
+        body_force_local = quat_rotate_inverse(self.rot, self.forces)  # (*shape, 3)
+        body_force_per_rotor = (body_force_local / self.num_rotors).unsqueeze(-2)  # (*shape, 1, 3)
+        rotor_forces = self.thrusts + body_force_per_rotor  # (*shape, num_rotors, 3)
+
         self.base_link.apply_forces_and_torques_at_pos(
             forces=self.forces.reshape(-1, 3).contiguous(),
             positions=None,
@@ -307,7 +321,7 @@ class MultirotorBase(RobotBase):
             is_global=True
         )
         self.rotors_view.apply_forces_and_torques_at_pos(
-            forces=self.thrusts.reshape(-1, 3).contiguous(),
+            forces=rotor_forces.reshape(-1, 3).contiguous(),
             positions=None,
             torques=None,
             is_global=False
