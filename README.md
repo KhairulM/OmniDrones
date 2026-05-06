@@ -10,7 +10,7 @@ A fork of [OmniDrones](https://github.com/btx0424/OmniDrones) focused on trainin
 
 ## Prerequisites
 
-- Linux (tested on Ubuntu) with an NVIDIA GPU (RTX class)
+- Linux (tested on Ubuntu) with an NVIDIA RTX 5090
 - NVIDIA driver compatible with **Isaac Sim 5.1.0**
 - **Python 3.11** (Isaac Sim 5.1 ships and is tested with 3.11)
 - A working installation of [NVIDIA Isaac Sim 5.1.0](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/index.html)
@@ -22,7 +22,7 @@ The project is laid out as a standard Python package at the repo root. Install i
 ### 1. Clone
 
 ```bash
-git clone git@github.com:KhairulM/OmniDrones.git RLInterceptorDrone
+git clone git@github.com:KhairulM/RL-Interceptor-Drone-v2.git RLInterceptorDrone
 cd RLInterceptorDrone
 ```
 
@@ -69,7 +69,8 @@ All commands below assume the venv is activated and you are at the repo root.
 ### Train (headless, recommended)
 
 ```bash
-python scripts/train.py task=Intercept headless=true env.num_envs=256
+cd scripts
+python train.py task=Intercept headless=true env.num_envs=256
 ```
 
 Useful overrides (Hydra syntax — `key=value`, dotted paths allowed):
